@@ -1,0 +1,242 @@
+-- ==========================================
+-- 1. SEGURANÇA DE PONTA (BYPASS TRIPLO)
+-- ==========================================
+-- Proteção 1: Impede Kick direto
+pcall(function() game.Players.LocalPlayer.Kick = function() end end)
+
+-- Proteção 2: Hook Avançado (Bloqueia Kick e limpa logs de erro)
+pcall(function()
+    local mt = getrawmetatable(game)
+    setreadonly(mt, false)
+    local oldNamecall = mt.__namecall
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "Kick" then return nil end
+        -- Impede que o jogo veja a criação de GUIs de hacks
+        if method == "FindFirstChild" and tostring(select(1, ...)) == "IlhaBelaAntiCheat" then
+            return nil 
+        end
+        return oldNamecall(self, ...)
+    end)
+    setreadonly(mt, true)
+end)
+
+-- Proteção 3: Limpeza de logs de erro (evita que o anti-cheat leia falhas do script)
+local oldError = error
+error = function(msg, level)
+    if string.find(tostring(msg), "attempt to index") or string.find(tostring(msg), "Drawing") then
+        return nil -- Ignora erros de UI do nosso script
+    end
+    return oldError(msg, level)
+end
+
+-- ==========================================
+-- 2. SERVIÇOS E VARIÁVEIS GLOBAIS
+-- ==========================================
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+local UserInputService = game:GetService("UserInputService")
+
+-- Carrega a UI
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Window = Rayfield:CreateWindow({
+   Name = "Ilha Bela Premium | V3 Seguro",
+   LoadingTitle = "Carregando Segurança...",
+   LoadingSubtitle = "by Assistente IA",
+   ConfigurationSaving = { Enabled = true, FolderName = "IlhaBela", FileName = "V3" },
+   KeySystem = false
+})
+
+-- ==========================================
+-- 3. CONFIGURAÇÕES (Otimizadas)
+-- ==========================================
+local Config = {
+    ESP_Players = false,
+    ESP_MaxDist = 500,
+    ESP_BoxColor = Color3.fromRGB(0, 255, 0),
+    ESP_TracerColor = Color3.fromRGB(255, 0, 0),
+    ESP_ShowHealth = true,
+    ESP_ShowName = true,
+    
+    Aimbot = false,
+    Aim_FOV = 120,
+    Aim_Smooth = 0.15,
+    Aim_WallCheck = true,
+    Aim_HoldKey = false
+}
+
+-- Cache de desenhos (Para evitar travamentos e Memory Leak)
+local DrawingsCache = {}
+
+local function ClearDrawings()
+    for _, obj in pairs(DrawingsCache) do
+        pcall(function()
+            if typeof(obj) == "Instance" then obj:Destroy() else obj:Remove() end
+        end)
+    end
+    table.clear(DrawingsCache)
+end
+
+-- Círculo do FOV (Criado uma única vez, apenas escondido/mostrado)
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness = 1
+FOVCircle.NumSides = 60
+FOVCircle.Transparency = 1
+FOVCircle.Filled = false
+FOVCircle.Visible = false
+
+-- ==========================================
+-- 4. FUNÇÕES AUXILIARES BLINDADAS
+-- ==========================================
+local function CreateDrawing(class, properties)
+    local obj = Drawing.new(class)
+    for k, v in pairs(properties) do obj[k] = v end
+    table.insert(DrawingsCache, obj)
+    return obj
+end
+
+local function FindHead(char)
+    if not char then return nil end
+    return char:FindFirstChild("Head") or char:FindFirstChild("HumanoidRootPart")
+end
+
+-- ==========================================
+-- 5. LOOP PRINCIPAL (RenderStepped)
+-- ==========================================
+RunService.RenderStepped:Connect(function()
+    -- === FOV VISUAL ===
+    if Config.Aimbot then
+        FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+        FOVCircle.Radius = Config.Aim_FOV
+        FOVCircle.Color = Color3.fromRGB(255, 255, 255)
+        FOVCircle.Visible = true
+    else
+        FOVCircle.Visible = false
+    end
+
+    -- === AIMBOT ===
+    if Config.Aimbot and LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        local active = true
+        if Config.Aim_HoldKey then
+            active = UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+        end
+
+        if active then
+            local closest, dist = nil, Config.Aim_FOV
+            local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+            for _, plr in pairs(Players:GetPlayers()) do
+                if plr ~= LocalPlayer and plr.Character then
+                    local hum = plr.Character:FindFirstChild("Humanoid")
+                    if hum and hum.Health > 0 then
+                        local head = FindHead(plr.Character)
+                        if head then
+                            local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                            if onScreen then
+                                local mag = (Vector2.new(screenPos.X, screenPos.Y) - center).Magnitude
+                                if mag < dist then
+                                    -- Wall Check Otimizado (Novo método do Roblox)
+                                    if Config.Aim_WallCheck then
+                                        local rayParams = RaycastParams.new()
+                                        rayParams.FilterDescendantsInstances = {LocalPlayer.Character}
+                                        rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                                        local rayResult = workspace:Raycast(Camera.CFrame.Position, head.Position - Camera.CFrame.Position, rayParams)
+                                        
+                                        if rayResult and rayResult.Instance and rayResult.Instance:IsDescendantOf(plr.Character) then
+                                            closest = head
+                                            dist = mag
+                                        end
+                                    else
+                                        closest = head
+                                        dist = mag
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+
+            -- Humanização e Suavidade da Mira
+            if closest then
+                local targetPos = closest.Position
+                if Config.Aim_Smooth > 0 then
+                    -- O Lerp suaviza a mira, evitando bans instantâneos
+                    Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, targetPos), Config.Aim_Smooth)
+                else
+                    Camera.CFrame = CFrame.new(Camera.CFrame.Position, targetPos)
+                end
+            end
+        end
+    end
+
+    -- === ESP ===
+    ClearDrawings()
+    if Config.ESP_Players then
+        for _, plr in pairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character and plr.Character:FindFirstChild("Head") then
+                local head = plr.Character.Head
+                local dist = (Camera.CFrame.Position - head.Position).Magnitude
+                
+                if dist <= Config.ESP_MaxDist then
+                    local screenPos, onScreen = Camera:WorldToViewportPoint(head.Position)
+                    if onScreen then
+                        -- Caixa
+                        local boxSize = Vector2.new(50, 70)
+                        CreateDrawing("Square", {
+                            Visible = true, Color = Config.ESP_BoxColor, Thickness = 1,
+                            Filled = false, Size = boxSize,
+                            Position = Vector2.new(screenPos.X, screenPos.Y) - (boxSize / 2)
+                        })
+
+                        -- Linha
+                        CreateDrawing("Line", {
+                            Visible = true, Color = Config.ESP_TracerColor, Thickness = 1,
+                            From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y),
+                            To = Vector2.new(screenPos.X, screenPos.Y)
+                        })
+
+                        -- Nome
+                        if Config.ESP_ShowName then
+                            CreateDrawing("Text", {
+                                Visible = true, Color = Color3.fromRGB(255, 255, 255), Size = 14,
+                                Center = true, Outline = true,
+                                Text = plr.Name .. " [" .. math.floor(dist) .. "m]",
+                                Position = Vector2.new(screenPos.X, screenPos.Y - 40)
+                            })
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- ==========================================
+-- 6. ABAS DA INTERFACE (UI)
+-- ==========================================
+local ESPTab = Window:CreateTab("ESP Visual", 4483362458)
+local AimTab = Window:CreateTab("Aimbot", 4483362458)
+
+-- ESP UI
+ESPTab:CreateSection("Jogadores")
+ESPTab:CreateToggle({ Name = "Ativar ESP", CurrentValue = false, Flag = "ESPToggle", Callback = function(Value) Config.ESP_Players = Value end })
+ESPTab:CreateSlider({ Name = "Distância Máxima", Range = {50, 2000}, Increment = 50, Suffix = "m", CurrentValue = 500, Callback = function(Value) Config.ESP_MaxDist = Value end })
+ESPTab:CreateColorPicker({ Name = "Cor da Caixa", Color = Color3.fromRGB(0, 255, 0), Callback = function(Value) Config.ESP_BoxColor = Value end })
+ESPTab:CreateToggle({ Name = "Mostrar Nome/Distância", CurrentValue = true, Callback = function(Value) Config.ESP_ShowName = Value end })
+
+-- Aimbot UI
+AimTab:CreateSection("Mira")
+AimTab:CreateToggle({ Name = "Ativar Aimbot", CurrentValue = false, Callback = function(Value) Config.Aimbot = Value end })
+AimTab:CreateSlider({ Name = "Tamanho do FOV", Range = {50, 400}, Increment = 10, CurrentValue = 120, Callback = function(Value) Config.Aim_FOV = Value end })
+AimTab:CreateSlider({ Name = "Suavidade (Smooth)", Range = {0, 100}, Increment = 1, CurrentValue = 15, Callback = function(Value) Config.Aim_Smooth = Value / 100 end })
+AimTab:CreateToggle({ Name = "Wall Check (Não mira na parede)", CurrentValue = true, Callback = function(Value) Config.Aim_WallCheck = Value end })
+AimTab:CreateToggle({ Name = "Segurar Botão Direito para Mirar", CurrentValue = false, Callback = function(Value) Config.Aim_HoldKey = Value end })
+
+Rayfield:Notify({
+   Title = "Sistema Seguro Carregado",
+   Content = "Script otimizado e humanizado. Pressione Right Shift.",
+   Duration = 5,
+})
